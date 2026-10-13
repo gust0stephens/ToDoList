@@ -48,7 +48,7 @@ button:disabled{opacity:.3;cursor:default}
 .empty{color:var(--dim);padding:.8em 0}
 @media (prefers-reduced-motion:reduce){.over .cd{animation:none}}
 
-.panel{position:absolute;inset:0;z-index:10;background:rgba(2,10,4,.95);display:flex;align-items:center;justify-content:center}
+.panel{position:absolute;inset:0;z-index:10;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center}
 .panel[hidden]{display:none}
 .form{width:76%;display:flex;flex-direction:column;gap:.5em;text-shadow:0 0 .35em var(--dim)}
 .form label{display:flex;flex-direction:column;color:var(--dim);font-size:.85em}
@@ -76,12 +76,29 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
 #pBoot{justify-content:flex-start;align-items:flex-start;padding:13% 12%;cursor:pointer}
 #bootTxt{line-height:1.35;text-shadow:0 0 .35em var(--dim)}
 @media (prefers-reduced-motion:reduce){.roll,.sweep,.cur i,.prompt::after,.typing::after{animation:none}}
+
+body.amber{--fg:#ffb000;--dim:#a06c00;--bg:#130c00;--warn:#ffe27a;--line:#5c3d00}
+#clock{cursor:pointer}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:.6em}
+.row button{padding:.1em .45em}
+.st{color:var(--fg)} .s-HOLD .st{color:var(--warn)} .s-DONE .st{color:var(--dim)} .s-ACTIVE .st{text-shadow:0 0 .6em var(--fg)}
+.alertc{color:var(--crit);text-shadow:0 0 .5em var(--crit);animation:blink 1s steps(2,start) infinite}
+/* completion effects */
+.spark{position:absolute;z-index:15;pointer-events:none;color:var(--fg);text-shadow:0 0 .5em var(--fg);animation:spark .7s ease-out forwards}
+@keyframes spark{to{transform:translate(var(--dx),var(--dy));opacity:0}}
+.crt.win .content{animation:pulse .5s ease-out}
+@keyframes pulse{from{filter:brightness(1.9)}to{filter:brightness(1)}}
+.banner{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);z-index:16;pointer-events:none;text-align:center;letter-spacing:.12em;
+  border:2px solid var(--fg);background:rgba(0,0,0,.85);padding:.45em 1.5em;box-shadow:0 0 1.2em var(--dim),inset 0 0 .8em var(--line);text-shadow:0 0 .5em var(--fg);white-space:nowrap}
+.banner .b2{color:var(--warn);font-size:.85em;min-height:1em}
+.banner.out{opacity:0;transition:opacity .45s}
+@media (prefers-reduced-motion:reduce){.crt.win .content{animation:none}}
 </style>
 </head>
 <body>
 <div class="bezel"><div class="crt">
   <div class="content">
-    <div class="top"><span>DECK-01 // DIRECTIVE LOG</span><span id="clock"></span></div>
+    <div class="top"><span id="title">DECK-01 // DIRECTIVE LOG</span><span id="rank" class="meta"></span><span id="clock" title="Tap to switch colour"></span></div>
     <div class="pathrow"><button id="up" title="Parent folder">..</button><span id="path"></span><span id="stat"></span></div>
     <div class="bar"><button id="sort"></button><button id="addT">+ DIRECTIVE</button><button id="addD">+ FOLDER</button><button id="snd"></button></div>
     <div class="list" id="list"></div>
@@ -98,10 +115,10 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
   </div></div>
 
   <div class="panel" id="pNew" hidden><div class="form">
-    <h2>NEW DIRECTIVE</h2>
+    <h2 id="nTitle">NEW DIRECTIVE</h2>
     <label>DESCRIPTION<div class="cur"><input id="nText" maxlength="80" autocomplete="off"><i></i></div></label>
     <label>DUE (OPTIONAL)<input id="nDue" type="datetime-local"></label>
-    <label>PRIORITY<select id="nPri"><option>ROUTINE</option><option>PRIORITY</option><option>CRITICAL</option></select></label>
+    <div class="two"><label>PRIORITY<select id="nPri"><option>ROUTINE</option><option>PRIORITY</option><option>CRITICAL</option></select></label><label>STATUS<select id="nSt"><option>OPEN</option><option>ACTIVE</option><option>HOLD</option><option>DONE</option></select></label></div>
     <div class="btns"><button id="nSave">SAVE</button><button id="nCancel">CANCEL</button></div>
   </div></div>
 
@@ -120,7 +137,61 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const local = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const SORTS = ['SORT: DUE SOONEST', 'SORT: DUE LATEST', 'SORT: ENTRY ORDER'];
-  let fresh = null, ac;
+  let fresh = null, ac, editing = null;
+  const GL = { OPEN: '[ ]', ACTIVE: '[>]', HOLD: '[!]', DONE: '[X]' };
+  const RANKS = [[0, 'CREWMAN'], [50, 'TECHNICIAN'], [150, 'SPECIALIST'], [300, 'OFFICER'], [600, 'COMMANDER'], [1000, 'CAPTAIN']];
+  const rank = xp => RANKS.filter(r => xp >= r[0]).pop()[1];
+  const st = t => t.status || (t.done ? 'DONE' : 'OPEN');
+  const setStatus = (t, v) => { t.status = v; t.done = v === 'DONE'; };
+  const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function tone(f, at, dur, vol) {
+    if (!S.snd) return;
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const o = ac.createOscillator(), g = ac.createGain(), t0 = ac.currentTime + at;
+      o.type = 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + dur);
+    } catch (e) {}
+  }
+  const chime = big => (big ? [523, 659, 784, 1047, 1319] : [523, 659, 784]).forEach((f, i) => tone(f, i * 0.09, 0.14, 0.03));
+  function sparks(el) {
+    if (still()) return;
+    const crt = document.querySelector('.crt'), cr = crt.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const x = r.left - cr.left + r.width / 2, y = r.top - cr.top + r.height / 2, ch = ['+', '*', '\u25AA', '\u00B7'];
+    for (let i = 0; i < 16; i++) {
+      const sp = document.createElement('span'), a = Math.random() * 6.283, d = 40 + Math.random() * 80;
+      sp.className = 'spark'; sp.textContent = ch[i % 4];
+      sp.style.left = x + 'px'; sp.style.top = y + 'px';
+      sp.style.setProperty('--dx', Math.cos(a) * d + 'px'); sp.style.setProperty('--dy', Math.sin(a) * d + 'px');
+      crt.appendChild(sp); setTimeout(() => sp.remove(), 900);
+    }
+  }
+  function flash() { const c = document.querySelector('.crt'); c.classList.remove('win'); void c.offsetWidth; c.classList.add('win'); setTimeout(() => c.classList.remove('win'), 600); }
+  function banner(a, b) {
+    const crt = document.querySelector('.crt'), el = document.createElement('div');
+    el.className = 'banner'; el.innerHTML = '<div class="b1"></div><div class="b2"></div>'; el.lastChild.textContent = b;
+    crt.appendChild(el); typeOut(el.firstChild, a, 24);
+    setTimeout(() => el.classList.add('out'), 1800); setTimeout(() => el.remove(), 2300);
+  }
+  function win(t, el) {
+    let gain = 0, up = null;
+    if (!t.paid) {
+      t.paid = true; gain = { ROUTINE: 10, PRIORITY: 20, CRITICAL: 40 }[t.pri] + (t.due && new Date(t.due) > Date.now() ? 10 : 0);
+      const before = rank(S.xp || 0); S.xp = (S.xp || 0) + gain;
+      if (rank(S.xp) !== before) up = rank(S.xp);
+    }
+    sparks(el); flash(); chime(!!up);
+    banner(up ? 'RANK UP: ' + up : 'DIRECTIVE COMPLETE', gain ? '+' + gain + ' XP' : 'ALREADY LOGGED');
+    say('DIRECTIVE DIR-' + pad(t.id, 4) + ' CLOSED. LOG ENTRY SAVED.');
+  }
+  function openEdit(id) {
+    const t = S.tasks.find(x => x.id === id); if (!t) return;
+    editing = id; $('nTitle').textContent = 'EDIT DIRECTIVE';
+    $('nText').value = t.text; $('nDue').value = t.due || ''; $('nPri').value = t.pri; $('nSt').value = st(t);
+    $('pNew').hidden = false; $('nText').focus(); $('nText').dispatchEvent(new Event('input'));
+  }
 
   function blip() {
     if (!S.snd) return;
@@ -211,7 +282,13 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
     $('sort').textContent = SORTS[S.sort];
     $('snd').textContent = 'SND: ' + (S.snd ? 'ON' : 'OFF');
     const open = S.tasks.filter(t => !t.done).length;
-    $('stat').textContent = `${open} OPEN`;
+    const ids = sub(S.cwd), here = S.tasks.filter(t => ids.includes(t.folder));
+    const pct = here.length ? Math.round(here.filter(t => t.done).length / here.length * 100) : 0, nb = Math.round(pct / 10);
+    $('stat').textContent = open + ' OPEN  [' + '\u2588'.repeat(nb) + '\u2591'.repeat(10 - nb) + '] ' + (here.length ? pct + '%' : '--');
+    $('rank').textContent = rank(S.xp || 0) + ' ' + (S.xp || 0) + 'XP';
+    const al = S.tasks.some(t => !t.done && t.pri === 'CRITICAL' && t.due && new Date(t.due) < Date.now());
+    $('title').textContent = al ? '!! ALERT: CRITICAL OVERDUE !!' : 'DECK-01 // DIRECTIVE LOG';
+    $('title').className = al ? 'alertc' : '';
 
     const dirs = S.folders.filter(f => f.parent === S.cwd).sort((a, b) => a.name.localeCompare(b.name));
     const tasks = S.tasks.filter(t => t.folder === S.cwd).sort(cmp);
@@ -219,11 +296,11 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
     for (const f of dirs) h += `<div class="row dir" data-act="open" data-id="${f.id}"><span class="tag">[DIR]</span><span class="nm">${esc(f.name)}/</span><span class="meta">${openCount(f.id)} OPEN</span><button data-act="rm" data-id="${f.id}">RM</button></div>`;
     for (const t of tasks) {
       const c = countdown(t);
-      h += `<div class="row task p-${t.pri}${t.done ? ' done' : ''}${c.over ? ' over' : ''}">
-        <button data-act="tog" data-id="${t.id}">${t.done ? '[X]' : '[ ]'}</button>
+      h += `<div class="row task p-${t.pri} s-${st(t)}${t.done ? ' done' : ''}${c.over ? ' over' : ''}">
+        <button data-act="tog" data-id="${t.id}">${GL[st(t)]}</button>
         <div class="body"><div class="tt"${t.id === fresh ? ` data-type="${esc(t.text)}"` : ''}>${t.id === fresh ? '' : esc(t.text)}</div>
-        <div class="sub${t.id === fresh ? ' hide' : ''}">DIR-${pad(t.id, 4)} <span class="pri">${t.pri}</span> ${t.due ? 'DUE ' + t.due.replace('T', ' ') : ''} <span class="cd">${c.txt}</span></div></div>
-        <button data-act="mv" data-id="${t.id}">MV</button><button data-act="del" data-id="${t.id}">DEL</button></div>`;
+        <div class="sub${t.id === fresh ? ' hide' : ''}">DIR-${pad(t.id, 4)} <span class="pri">${t.pri}</span> <span class="st">${st(t)}</span> ${t.due ? 'DUE ' + t.due.replace('T', ' ') : ''} <span class="cd">${c.txt}</span></div></div>
+        <button data-act="ed" data-id="${t.id}">ED</button><button data-act="mv" data-id="${t.id}">MV</button><button data-act="del" data-id="${t.id}">DEL</button></div>`;
     }
     $('list').innerHTML = h || '<div class="empty">NO ENTRIES. ADD A DIRECTIVE OR FOLDER.</div>';
     const ft = $('list').querySelector('[data-type]');
@@ -239,7 +316,11 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
     const el = e.target.closest('[data-act]'); if (!el) return;
     const act = el.dataset.act, id = el.dataset.id;
     if (act === 'open') { S.cwd = id; sweep(); say('ACCESSING ' + pathOf(id)); }
-    else if (act === 'tog') { const t = S.tasks.find(x => x.id == id); t.done = !t.done; say(t.done ? 'DIRECTIVE DIR-' + pad(t.id, 4) + ' CLOSED. LOG ENTRY SAVED.' : 'DIRECTIVE REOPENED.'); }
+    else if (act === 'tog') {
+      const t = S.tasks.find(x => x.id == id), next = { OPEN: 'ACTIVE', ACTIVE: 'DONE', HOLD: 'ACTIVE', DONE: 'OPEN' }[st(t)];
+      setStatus(t, next);
+      if (next === 'DONE') win(t, el); else say('DIRECTIVE DIR-' + pad(t.id, 4) + ' STATUS: ' + next);
+    }
     else if (act === 'del') { if (confirm('DELETE THIS DIRECTIVE?')) { S.tasks = S.tasks.filter(x => x.id != id); say('DIRECTIVE PURGED.'); } }
     else if (act === 'rm') {
       const f = S.folders.find(x => x.id === id), ids = sub(id);
@@ -249,6 +330,7 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
         say('FOLDER ' + f.name + ' PURGED.');
       }
     }
+    else if (act === 'ed') { openEdit(+id); return; }
     else if (act === 'mv') {
       moving = +id;
       const opts = [{ id: 'root', p: '/' }, ...S.folders.map(f => ({ id: f.id, p: pathOf(f.id) }))].sort((a, b) => a.p.localeCompare(b.p));
@@ -271,23 +353,32 @@ h2{margin:0;font-weight:normal;letter-spacing:.1em;border-bottom:1px solid var(-
   $('dSave').onclick = saveDir;
   $('dName').addEventListener('keydown', e => { if (e.key === 'Enter') saveDir(); });
   $('dCancel').onclick = () => { $('pDir').hidden = true; };
-  $('addT').onclick = () => { $('nText').value = ''; $('nDue').value = ''; $('nPri').value = 'ROUTINE'; $('pNew').hidden = false; $('nText').focus(); };
+  $('addT').onclick = () => { editing = null; $('nTitle').textContent = 'NEW DIRECTIVE'; $('nText').value = ''; $('nDue').value = ''; $('nPri').value = 'ROUTINE'; $('nSt').value = 'OPEN'; $('pNew').hidden = false; $('nText').focus(); };
   const saveTask = () => {
     const text = $('nText').value.trim().toUpperCase(); if (!text) { $('nText').focus(); return; }
+    if (editing !== null) {
+      const t = S.tasks.find(x => x.id === editing);
+      if (t) { t.text = text; t.due = $('nDue').value; t.pri = $('nPri').value; setStatus(t, $('nSt').value); say('DIRECTIVE DIR-' + pad(t.id, 4) + ' UPDATED.'); }
+      editing = null;
+    } else {
     const id = ++S.seq;
-    S.tasks.push({ id, text, due: $('nDue').value, pri: $('nPri').value, done: false, folder: S.cwd });
+    const t = { id, text, due: $('nDue').value, pri: $('nPri').value, folder: S.cwd };
+    setStatus(t, $('nSt').value); S.tasks.push(t);
     fresh = id;
+    }
     $('pNew').hidden = true; save(); render();
   };
   $('nSave').onclick = saveTask;
   $('nText').addEventListener('keydown', e => { if (e.key === 'Enter') saveTask(); });
-  $('nCancel').onclick = () => { $('pNew').hidden = true; };
+  $('nCancel').onclick = () => { editing = null; $('pNew').hidden = true; };
   $('mSave').onclick = () => { S.tasks.find(x => x.id === moving).folder = $('mDest').value; $('pMove').hidden = true; save(); render(); say('DIRECTIVE MOVED TO ' + pathOf($('mDest').value)); };
   $('mCancel').onclick = () => { $('pMove').hidden = true; };
 
   const tick = () => { const d = new Date(); $('clock').textContent = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   tick(); render();
   blockCursor($('nText')); blockCursor($('dName'));
+  if (S.theme === 'amber') document.body.classList.add('amber');
+  $('clock').onclick = () => { S.theme = document.body.classList.toggle('amber') ? 'amber' : 'green'; save(); };
   $('snd').onclick = () => { S.snd = !S.snd; save(); render(); blip(); };
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { $('pBoot').hidden = true; say('AWAITING INPUT.'); } else boot();
   setInterval(tick, 1000);
